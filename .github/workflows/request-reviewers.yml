@@ -1,0 +1,65 @@
+name: Request reviewers
+
+on:
+  pull_request_target:
+    types: [opened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  request-reviewers:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # pull_request_target must never check out or execute pull request code here.
+      - name: Request one owner and two other reviewers
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const pullRequest = context.payload.pull_request;
+
+            // Read from the base commit so a pull request cannot choose its own reviewers.
+            const { data: file } = await github.rest.repos.getContent({
+              ...context.repo,
+              path: '.github/reviewers.json',
+              ref: pullRequest.base.sha,
+            });
+            const { owners, reviewers } = JSON.parse(Buffer.from(file.content, 'base64').toString());
+
+            const openPullRequests = await github.paginate(github.rest.pulls.list, {
+              ...context.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const countPendingRequests = (user) =>
+              openPullRequests.filter((open) => open.requested_reviewers.some(({ login }) => login === user)).length;
+
+            const isNotAuthor = (user) => user !== pullRequest.user.login;
+
+            const pickRandom = (users) => {
+              const candidates = users.filter(isNotAuthor);
+              return candidates.length ? [candidates[Math.floor(Math.random() * candidates.length)]] : [];
+            };
+
+            const pickLeastLoaded = (users, count) =>
+              users
+                .filter(isNotAuthor)
+                .map((user) => ({ user, pending: countPendingRequests(user), tiebreak: Math.random() }))
+                .sort((a, b) => a.pending - b.pending || a.tiebreak - b.tiebreak)
+                .slice(0, count)
+                .map(({ user }) => user);
+
+            const requested = [
+              ...pickRandom(owners),
+              ...pickLeastLoaded(reviewers.filter((user) => !owners.includes(user)), 2),
+            ];
+            core.info(`Requesting review from ${requested.join(', ')}`);
+
+            await github.rest.pulls.requestReviewers({
+              ...context.repo,
+              pull_number: pullRequest.number,
+              reviewers: requested,
+            });
