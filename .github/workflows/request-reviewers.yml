@@ -1,0 +1,22 @@
+name: Request reviewers
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  request-reviewers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Request Commit Access team
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh api --method POST "repos/$GH_REPO/pulls/$PR_NUMBER/requested_reviewers" \
+            -f 'team_reviewers[]=commit-access'
